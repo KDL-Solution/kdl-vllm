@@ -552,9 +552,9 @@ class CustomDataset(BenchmarkDataset):
         return sampled_requests
 
 
-class QwenDataset(BenchmarkDataset):
+class CustmChatDataset(BenchmarkDataset):
     """
-    Implements the Qwen dataset with multimodal support.
+    Implements the CustmChat Dataset with multimodal support.
     Loads data from a JSONL file and generates sample requests based on conversation turns.
     ```
     Supports both text-only and multimodal (text + image) data formats:

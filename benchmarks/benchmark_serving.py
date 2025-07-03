@@ -62,7 +62,7 @@ from benchmark_dataset import (
     BurstGPTDataset,
     ConversationDataset,
     CustomDataset,
-    QwenDataset,
+    CustmChatDataset,
     HuggingFaceDataset,
     InstructCoderDataset,
     MTBenchDataset,
@@ -746,11 +746,11 @@ def main(args: argparse.Namespace):
             output_len=args.custom_output_len,
             skip_chat_template=args.custom_skip_chat_template,
         )
-    elif args.dataset_name == "qwen":
-        dataset = QwenDataset(dataset_path=args.dataset_path)
+    elif args.dataset_name == "custom-chat":
+        dataset = CustmChatDataset(dataset_path=args.dataset_path)
         if args.backend != "openai-chat":
             raise ValueError(
-                "Qwen dataset is only supported on 'openai-chat' backend."
+                "custom-chat is only supported on 'openai-chat' backend."
             )
         input_requests = dataset.sample(
             num_requests=args.num_prompts,
