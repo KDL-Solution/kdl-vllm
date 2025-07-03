@@ -62,6 +62,7 @@ from benchmark_dataset import (
     BurstGPTDataset,
     ConversationDataset,
     CustomDataset,
+    QwenDataset,
     HuggingFaceDataset,
     InstructCoderDataset,
     MTBenchDataset,
@@ -745,6 +746,18 @@ def main(args: argparse.Namespace):
             output_len=args.custom_output_len,
             skip_chat_template=args.custom_skip_chat_template,
         )
+    elif args.dataset_name == "qwen":
+        dataset = QwenDataset(dataset_path=args.dataset_path)
+        if args.backend != "openai-chat":
+            raise ValueError(
+                "Qwen dataset is only supported on 'openai-chat' backend."
+            )
+        input_requests = dataset.sample(
+            num_requests=args.num_prompts,
+            tokenizer=tokenizer,
+            output_len=args.custom_output_len,
+            skip_chat_template=args.custom_skip_chat_template,
+        )
 
     elif args.dataset_name == "sonnet":
         dataset = SonnetDataset(dataset_path=args.dataset_path)
@@ -1023,7 +1036,7 @@ def create_argument_parser():
         "--dataset-name",
         type=str,
         default="sharegpt",
-        choices=["sharegpt", "burstgpt", "sonnet", "random", "hf", "custom"],
+        choices=["sharegpt", "burstgpt", "sonnet", "random", "hf", "custom", "custom-chat"],
         help="Name of the dataset to benchmark on.",
     )
     parser.add_argument(

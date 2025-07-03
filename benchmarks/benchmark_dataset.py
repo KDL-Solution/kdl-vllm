@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from datasets import load_dataset
 from PIL import Image
+from pathlib import Path
 from transformers import PreTrainedTokenizerBase
 
 from vllm.lora.request import LoRARequest
@@ -233,7 +234,7 @@ def lora_path_on_disk(lora_path: str) -> str:
 lora_tokenizer_cache: dict[int, AnyTokenizer] = {}
 
 
-def process_image(image: Any) -> Mapping[str, Any]:
+def process_image(image: Any, convert_path_to_base64: bool = False) -> Mapping[str, Any]:
     """
     Process a single image input and return a multimedia content dictionary.
 
@@ -266,10 +267,29 @@ def process_image(image: Any) -> Mapping[str, Any]:
         }
 
     if isinstance(image, str):
-        image_url = (
-            image if image.startswith(("http://", "file://")) else f"file://{image}"
-        )
-        return {"type": "image_url", "image_url": {"url": image_url}}
+        if image.startswith(("http://", "https://")):
+            return {"type": "image_url", "image_url": {"url": image}}
+        if image.startswith("file://"):
+            image = image[len("file://"):]
+        image_path  = Path(image).resolve()
+        if convert_path_to_base64:
+            if not image_path.exists():
+                raise ValueError(f"Image path {image_path} does not exist.")
+            try:
+                with Image.open(image_path) as pil_image:
+                    pil_image = convert_image_mode(pil_image, "RGB")
+                    with io.BytesIO() as image_data:
+                        pil_image.save(image_data, format="JPEG")
+                        image_base64 = base64.b64encode(image_data.getvalue()).decode("utf-8")
+                    return {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                    }
+            except Exception as e:
+                raise ValueError(f"Failed to process image file {image_path}: {str(e)}")
+        else:
+            image_url = f"file://{image_path.as_posix()}"
+            return {"type": "image_url", "image_url": {"url": image_url}}
 
     raise ValueError(
         f"Invalid image input {image}. Must be a PIL.Image.Image"
@@ -450,15 +470,15 @@ class CustomDataset(BenchmarkDataset):
     """
     Implements the Custom dataset.  Loads data from a JSONL file and generates
     sample requests based on conversation turns. E.g.,
-    ```
+    
     {"prompt": "What is the capital of India?"}
     {"prompt": "What is the capital of Iran?"}
     {"prompt": "What is the capital of China?"}
-    ```
+    
     """
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def init(self, kwargs) -> None:
+        super().init(kwargs)
         self.load_data()
 
     def load_data(self) -> None:
@@ -525,6 +545,94 @@ class CustomDataset(BenchmarkDataset):
                     prompt=prompt,
                     prompt_len=prompt_len,
                     expected_output_len=output_len,
+                )
+            )
+        self.maybe_oversample_requests(sampled_requests, num_requests)
+
+        return sampled_requests
+
+
+class QwenDataset(BenchmarkDataset):
+    """
+    Implements the Qwen dataset with multimodal support.
+    Loads data from a JSONL file and generates sample requests based on conversation turns.
+    ```
+    Supports both text-only and multimodal (text + image) data formats:
+    Text-only: {"prompt": "What is the capital of India?"}
+
+    Multimodal: {"prompt": "What do you see in this image?", "image": "/path/to/image.jpg"}
+    Multimodal with base64: {"prompt": "Describe this image", "image": "data:image/jpeg;base64,/9j/4AAQ..."}
+    ```
+    """
+
+    IS_MULTIMODAL = True
+    
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.load_data()
+
+    def load_data(self) -> None:
+        if self.dataset_path is None:
+            raise ValueError("dataset_path must be provided for loading data.")
+
+        # self.data will be a list of dictionaries
+        # e.g., [{"prompt": "What is the capital of India?"}, ...]
+        # This will be the standardized format which load_data()
+        # has to convert into depending on the filetype of dataset_path.
+        # sample() will assume this standardized format of self.data
+        self.data = []
+
+        # Load the JSONL file
+        if self.dataset_path.endswith(".jsonl"):
+            jsonl_data = pd.read_json(path_or_buf=self.dataset_path, lines=True)
+
+            # check if the JSONL file has a 'prompt' column
+            if "prompt" not in jsonl_data.columns:
+                raise ValueError("JSONL file must contain a 'prompt' column.")
+
+            # Convert each row to a dictionary and append to self.data
+            # This will convert the DataFrame to a list of dictionaries
+            # where each dictionary corresponds to a row in the DataFrame.
+            # This is the standardized format we want for self.data
+            for _, row in jsonl_data.iterrows():
+                self.data.append(row.to_dict())
+        else:
+            raise NotImplementedError(
+                "Only JSONL format is supported for CustomDataset."
+            )
+
+        random.seed(self.random_seed)
+        random.shuffle(self.data)
+
+    def sample(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        num_requests: int,
+        lora_path: Optional[str] = None,
+        max_loras: Optional[int] = None,
+        output_len: Optional[int] = None,
+        enable_multimodal_chat: bool = True,
+        **kwargs,
+    ) -> list:
+        sampled_requests = []
+        for item in self.data:
+            if len(sampled_requests) >= num_requests:
+                break
+            prompt = item["prompt"]
+            prompt_ids = tokenizer(prompt).input_ids
+            prompt_len = len(prompt_ids)
+
+            has_image = "image" in item and item["image"]
+            
+            if has_image and enable_multimodal_chat:
+                mm_content = process_image(item["image"], convert_path_to_base64=True)
+
+            sampled_requests.append(
+                SampleRequest(
+                    prompt=prompt,
+                    prompt_len=prompt_len,
+                    expected_output_len=output_len,
+                    multi_modal_data=mm_content,
                 )
             )
         self.maybe_oversample_requests(sampled_requests, num_requests)
